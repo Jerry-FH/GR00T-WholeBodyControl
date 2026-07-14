@@ -151,6 +151,27 @@ def ensure_container() -> None:
         time.sleep(2)
 
 
+def assert_dds_clear(seconds: float = 1.5) -> None:
+    """Abort early if ANOTHER simulator is already publishing rt/lowstate on
+    DDS domain 0 (e.g. a leftover run_sim_loop.py / run_sim_rh56.py window).
+    Two sims interleave their states into the deploy's observations and the
+    robot falls constantly — a maddening failure mode that looks like a bad
+    model. Cost us an evening: 2026-07-14."""
+    from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelSubscriber
+    from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
+    ChannelFactoryInitialize(0, "lo")
+    n = [0]
+    sub = ChannelSubscriber("rt/lowstate", LowState_)
+    sub.Init(lambda msg: n.__setitem__(0, n[0] + 1), 10)
+    time.sleep(seconds)
+    sub.Close()
+    if n[0] > 0:
+        raise SystemExit(
+            f"[dds] rt/lowstate already flowing on domain 0 ({n[0]} msgs in "
+            f"{seconds:.0f}s) — close any other running simulator "
+            "(run_sim_loop.py / run_sim_rh56.py) before running tests")
+
+
 def kill_deploy_and_wait(timeout: float = 15.0) -> None:
     """kill_deploy + wait until the g1_debug port is actually released —
     a half-dead leftover binary aborts the next run with 'Address already in
@@ -181,6 +202,7 @@ def main():
     LOGS.mkdir(parents=True, exist_ok=True)
     ensure_container()
     kill_deploy_and_wait()
+    assert_dds_clear()
 
     sim_proc = start_sim_server(LOGS / "sim_stdout.log")
     ctrl = None

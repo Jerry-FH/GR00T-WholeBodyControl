@@ -29,7 +29,7 @@ class GVHMRStreamEstimator:
     def __init__(self, device: str = "cuda", window: int = 96, min_window: int = 16,
                  yolo_period: int = 1, flip_test: bool = True, postproc: bool = True,
                  autocast: bool = False, fp16: bool = False, hands: bool = False,
-                 verbose_timing: bool = False):
+                 hand_backend: str = "mediapipe", verbose_timing: bool = False):
         assert device == "cuda"
         self.window = window
         self.min_window = min_window
@@ -46,8 +46,12 @@ class GVHMRStreamEstimator:
         self.hand_period = 1
         self._last_hands: dict = {}
         if hands:
-            from estimators.hand_tracker import HandTracker
-            self.hand_tracker = HandTracker()
+            if hand_backend == "wilor":
+                from estimators.wilor_tracker import WilorHandTracker
+                self.hand_tracker = WilorHandTracker(device=device)
+            else:
+                from estimators.hand_tracker import HandTracker
+                self.hand_tracker = HandTracker()
 
         import hydra
         from demo import parse_args_to_cfg  # noqa: F401 (registers hydra store)

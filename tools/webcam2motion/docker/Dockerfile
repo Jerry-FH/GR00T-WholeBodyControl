@@ -51,6 +51,13 @@ RUN uv pip install --python $VENV/bin/python mediapipe && \
     mkdir -p /opt/models && curl -fsSL -o /opt/models/hand_landmarker.task \
     https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task
 
+# WiLoR GPU hand backend (--hand-backend wilor): MANO regression via wilor-mini.
+# Weights land in /opt/GVHMR/inputs/checkpoints/wilor (host bind mount) on first
+# run; the official MANO_RIGHT.pkl is pre-placed there from the user's
+# registered MANO download, so no mirrored copy is fetched.
+RUN uv pip install --python $VENV/bin/python \
+    "git+https://github.com/warmshao/WiLoR-mini"
+
 # streaming code + gear_sonic utils come from the bind-mounted repo at runtime
 ENV PYTHONPATH=/workspace/gr00t-wbc:/opt/GVHMR
 WORKDIR /workspace/gr00t-wbc/tools/webcam2motion

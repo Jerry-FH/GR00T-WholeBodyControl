@@ -2,9 +2,13 @@
 
 Surgery on gear_sonic/data/robot_model/model_data/g1/g1_29dof_with_hand.xml:
   1. delete the Dex3 finger subtrees + their 14 motors
-  2. attach DFQ left/right hand URDFs at the wrist_yaw links with the mount
-     transforms from unitree's g1_29dof_rev_1_0_with_inspire_hand_DFQ.urdf
-     (L: xyz 0.0415 0 0, rpy 0 0 pi/2; R: xyz 0.0415 0 0, rpy pi 0 -pi/2)
+  2. attach the DFQ URDFs' hand_base_link at the wrist_yaw links with an
+     IDENTITY frame. The DFQ URDFs already carry the full mount transform
+     (L: xyz 0.0415 0 0, rpy 0 0 pi/2; R: rpy pi 0 -pi/2) as the base
+     link's own pos/quat, and MjSpec attach preserves it — adding the same
+     transform again on the outer frame doubles it and yields fingers
+     90 deg outboard + right palm flipped 180 deg (verified against the
+     Dex3 scene: finger dir must be ~+x, curl dir ~+y in the wrist frame).
   3. joints get left_hand_/right_hand_ prefixes (BaseSimulator classifies hand
      joints by that substring; none may contain body substrings like 'wrist')
   4. regenerate ALL actuators, one <motor> per non-free joint in joint-id
@@ -19,8 +23,6 @@ Run from repo root:  .venv_sim/bin/python tools/webcam2motion/hand_viewer/make_r
 import os
 
 import mujoco
-import numpy as np
-from scipy.spatial.transform import Rotation as R
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 MODEL_DIR = os.path.join(REPO, "gear_sonic/data/robot_model/model_data/g1")
@@ -28,15 +30,6 @@ ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 
 DEX3_ROOTS = [f"{s}_hand_{f}_0_link" for s in ("left", "right")
               for f in ("thumb", "middle", "index")]
-MOUNTS = {  # from g1_29dof_rev_1_0_with_inspire_hand_DFQ.urdf fixed joints
-    "left": dict(pos=[0.0415, 0, 0], rpy=[0, 0, np.pi / 2]),
-    "right": dict(pos=[0.0415, 0, 0], rpy=[np.pi, 0, -np.pi / 2]),
-}
-
-
-def rpy_to_quat_wxyz(rpy):
-    x, y, z, w = R.from_euler("xyz", rpy).as_quat()
-    return [w, x, y, z]
 
 
 def main():
@@ -58,10 +51,21 @@ def main():
 
     for side in ("left", "right"):  # 2-3. attach DFQ hands
         sub = mujoco.MjSpec.from_file(os.path.join(ASSETS, f"DFQ_{side}_hand.urdf"))
+        # fingers are kinematically driven (NUM_HAND_MOTORS=0, qpos writes) —
+        # disable their contacts: at the correct mount the thumb mesh
+        # interpenetrates the wrist link (-6 mm at rest), and the resulting
+        # 1 kHz contact forces on the arm tip destabilize the policy
+        # (21 falls/35 s in test_m2). Damping stops torqueless finger flail.
+        for body in sub.bodies:
+            for geom in body.geoms:
+                geom.contype = 0
+                geom.conaffinity = 0
+        for joint in sub.joints:
+            joint.damping = [0.05, 0.0, 0.0]  # MjsJoint stores per-dof (3,)
         wrist = spec.body(f"{side}_wrist_yaw_link")
-        m = MOUNTS[side]
-        frame = wrist.add_frame(pos=m["pos"], quat=rpy_to_quat_wxyz(m["rpy"]))
-        frame.attach_body(sub.worldbody.first_body(), f"{side}_hand_", "")
+        frame = wrist.add_frame()  # identity — URDF base link carries the mount
+        base = sub.body(f"{side[0].upper()}_hand_base_link")  # skip URDF wrist dummy
+        frame.attach_body(base, f"{side}_hand_", "")
 
     model = spec.compile()  # 4. regenerate actuators in joint-id order
     joint_order = [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, j)

@@ -83,6 +83,36 @@ def rh56_from_landmarks(lm: np.ndarray, side: str) -> np.ndarray:
     return out
 
 
+def hand_roi(kp2d: np.ndarray, side: str, frame_shape, roi_scale: float = 1.6
+             ) -> tuple | None:
+    """Square hand ROI: centered beyond the wrist along the forearm.
+
+    The 2D forearm foreshortens when the arm points at the camera — a
+    torso-proportional floor keeps the ROI from collapsing then. Shared by
+    the MediaPipe and WiLoR backends."""
+    e, w = (L_ELBOW, L_WRIST) if side == "left" else (R_ELBOW, R_WRIST)
+    if kp2d[w, 2] < 0.3 or kp2d[e, 2] < 0.3:
+        return None
+    elbow, wrist = kp2d[e, :2], kp2d[w, :2]
+    forearm = wrist - elbow
+    flen = np.linalg.norm(forearm)
+    if flen < 5:
+        return None
+    # torso scale: mid-shoulder to mid-hip (COCO17: 5,6 shoulders; 11,12 hips)
+    torso = 0.0
+    if kp2d[[5, 6, 11, 12], 2].min() > 0.3:
+        torso = float(np.linalg.norm(
+            (kp2d[5, :2] + kp2d[6, :2]) / 2 - (kp2d[11, :2] + kp2d[12, :2]) / 2))
+    center = wrist + 0.35 * forearm  # hand extends past the wrist
+    half = max(roi_scale * 0.5 * flen, 0.28 * torso, 28.0)
+    H, W = frame_shape[:2]
+    x0, y0 = int(max(center[0] - half, 0)), int(max(center[1] - half, 0))
+    x1, y1 = int(min(center[0] + half, W)), int(min(center[1] + half, H))
+    if x1 - x0 < 24 or y1 - y0 < 24:
+        return None
+    return x0, y0, x1, y1
+
+
 MODEL_PATH = "/opt/models/hand_landmarker.task"
 
 
@@ -114,31 +144,7 @@ class HandTracker:
         self.roi_scale = roi_scale
 
     def _roi(self, kp2d: np.ndarray, side: str, frame_shape) -> tuple | None:
-        """Square hand ROI: centered beyond the wrist along the forearm.
-
-        The 2D forearm foreshortens when the arm points at the camera — a
-        torso-proportional floor keeps the ROI from collapsing then."""
-        e, w = (L_ELBOW, L_WRIST) if side == "left" else (R_ELBOW, R_WRIST)
-        if kp2d[w, 2] < 0.3 or kp2d[e, 2] < 0.3:
-            return None
-        elbow, wrist = kp2d[e, :2], kp2d[w, :2]
-        forearm = wrist - elbow
-        flen = np.linalg.norm(forearm)
-        if flen < 5:
-            return None
-        # torso scale: mid-shoulder to mid-hip (COCO17: 5,6 shoulders; 11,12 hips)
-        torso = 0.0
-        if kp2d[[5, 6, 11, 12], 2].min() > 0.3:
-            torso = float(np.linalg.norm(
-                (kp2d[5, :2] + kp2d[6, :2]) / 2 - (kp2d[11, :2] + kp2d[12, :2]) / 2))
-        center = wrist + 0.35 * forearm  # hand extends past the wrist
-        half = max(self.roi_scale * 0.5 * flen, 0.28 * torso, 28.0)
-        H, W = frame_shape[:2]
-        x0, y0 = int(max(center[0] - half, 0)), int(max(center[1] - half, 0))
-        x1, y1 = int(min(center[0] + half, W)), int(min(center[1] + half, H))
-        if x1 - x0 < 24 or y1 - y0 < 24:
-            return None
-        return x0, y0, x1, y1
+        return hand_roi(kp2d, side, frame_shape, self.roi_scale)
 
     @staticmethod
     def _wrist_angles(lm: np.ndarray, elbow_to_wrist_2d: np.ndarray, side: str) -> np.ndarray:

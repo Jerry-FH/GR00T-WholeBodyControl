@@ -253,6 +253,7 @@ def make_estimator(name: str, args):
         return GVHMRStreamEstimator(device="cuda", window=32, flip_test=False,
                                     postproc=False, fp16=not args.no_fp16,
                                     hands=not args.no_hands,
+                                    hand_backend=args.hand_backend,
                                     yolo_period=args.yolo_period)
     raise SystemExit(f"unknown estimator: {name}")
 
@@ -272,7 +273,11 @@ def main():
                     default="smooth")
     ap.add_argument("--no-fp16", action="store_true")
     ap.add_argument("--no-hands", action="store_true",
-                    help="disable MediaPipe palm-orientation (wrist roll) tracking")
+                    help="disable palm-orientation (wrist roll) + finger tracking")
+    ap.add_argument("--hand-backend", choices=["mediapipe", "wilor"],
+                    default="mediapipe",
+                    help="mediapipe: CPU landmark tracker (default). wilor: GPU "
+                         "MANO regression (needs wilor-mini installed)")
     ap.add_argument("--yolo-period", type=int, default=2)
     ap.add_argument("--min-cutoff", type=float, default=1.0)
     ap.add_argument("--beta", type=float, default=0.1)

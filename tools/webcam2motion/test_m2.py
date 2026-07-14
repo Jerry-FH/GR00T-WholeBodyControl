@@ -23,7 +23,7 @@ from record_debug_stream import StreamRecorder  # noqa: E402
 from run_benchmark import SimCtrl, start_sim_server, stop_sim_server, wait_sim_ready  # noqa: E402
 
 from test_m0 import ZmqDeployProc, analyze_tracking, ensure_container  # noqa: E402
-from test_m0 import kill_deploy_and_wait  # noqa: E402
+from test_m0 import assert_dds_clear, kill_deploy_and_wait  # noqa: E402
 from common import DEPLOY_WS_CONTAINER  # noqa: E402
 
 LOGS = REPO_ROOT / "gear_sonic_deploy" / "logs" / "webcam2motion_m2"
@@ -82,6 +82,7 @@ def main():
     LOGS.mkdir(parents=True, exist_ok=True)
     ensure_container()
     kill_deploy_and_wait()
+    assert_dds_clear()
     subprocess.run(["docker", "rm", "-f", "w2m-stream"], capture_output=True)
 
     sim_proc = start_sim_server(LOGS / "sim_stdout.log")

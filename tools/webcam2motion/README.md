@@ -218,3 +218,31 @@ wbc yaml 已改：`ROBOT_SCENE`、`NUM_HAND_JOINTS: 12`、`NUM_HAND_MOTORS: 0`
 原理：包一層 `sim_step`，每步把 :5556 的 rh56 欄位經 mimic 比例寫進 24 個
 手指 qpos（actuator_id==joint_id-1 不變式由生成腳本保證＋斷言）。
 用官方 `run_sim_loop.py` 也能跑（手指下垂不動，物理無礙）。
+
+掛載方向（2026-07-14 修正）：DFQ URDF 的 `X_base_link_joint` **自帶完整掛載變換**
+（L: xyz 0.0415 rpy 0 0 π/2；R: rpy π 0 −π/2），MjSpec attach 會保留 base link 的
+pos/quat——外層 frame 必須是 identity，再疊一次會指尖外翻 90°＋右掌反 180°。
+驗證方法：與 Dex3 原場景在 wrist 座標系比對（指向 ≈ +x、彎向掌心 ≈ 內側）。
+手部 geom 碰撞已全關（純運動學手指；正確方向下拇指網格與腕連桿天生互嵌 6mm，
+留碰撞會持續打出接觸力）＋關節加阻尼防無力矩甩動。
+
+⚠️ **DDS 注意**：`run_sim_rh56.py` / `run_sim_loop.py` / 各 test 的 sim 都在
+DDS domain 0 發布——**同一時間只能開一個 sim**，否則 deploy 觀測被交錯污染、
+機器人狂跌。test_m0/test_m2 啟動會自動偵測並報錯。
+
+### 手部後端：MediaPipe（CPU，預設）vs WiLoR（GPU）
+
+```bash
+# 容器內（run_live.sh / stream_webcam_zmq.py 均可）加：
+--hand-backend wilor
+```
+
+WiLoR（wilor-mini）在 GPU 上迴歸 MANO 手模（fp16 ~25–40ms），取代 MediaPipe 的
+~30ms CPU 負載；用我們的 ViTPose 腕部 ROI 餵 `predict_with_bboxes`（跳過其內建
+偵測器），21 點順序與 MediaPipe 相同、下游零改動。權重首跑自動下載至
+`checkpoints/wilor/`；官方 `MANO_RIGHT.pkl` 已由 `body_models/mano/` 預先複製。
+安裝（image 尚未重建時，在容器內執行）：
+
+```bash
+uv pip install --python /opt/venv/bin/python "git+https://github.com/warmshao/WiLoR-mini"
+```

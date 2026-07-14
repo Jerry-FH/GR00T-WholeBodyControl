@@ -101,9 +101,18 @@
 |---|---|---|
 | 人物偵測 | YOLOv8x | 1–14ms |
 | 2D 姿態 | ViTPose-huge（fp16） | ~42ms |
-| 手部 | MediaPipe HandLandmarker（VIDEO 模式） | ~30ms |
+| 手部（預設） | MediaPipe HandLandmarker（VIDEO 模式，**CPU**） | ~30ms |
+| 手部（`--hand-backend wilor`） | WiLoR（wilor-mini，MANO 迴歸，**GPU fp16**） | ~25–40ms |
 | 影像特徵 | HMR2.0 ViT（fp16） | ~19ms |
 | 動作估計 | GVHMR 滑動視窗（W=32、no-postproc） | ~19ms |
+
+手部後端二選一（`estimators/hand_tracker.py` vs `estimators/wilor_tracker.py`，
+同一 `track()` 介面）：MediaPipe 跑 CPU（XNNPACK）、輕但與 sim/deploy 搶核心且
+靠幾何推導；WiLoR 直接迴歸 MANO 參數（腕旋轉與指彎更穩、抗模糊/遮擋），跑 GPU
+釋放 CPU。WiLoR 沿用我們的 ViTPose 腕部 ROI（`predict_with_bboxes` 跳過其內建
+YOLO 偵測器），輸出 21 點順序 = OpenPose = MediaPipe，下游（rh56 映射、
+WristBlender、預覽面板）零改動。權重首跑自動下載到
+`checkpoints/wilor/`（官方 `MANO_RIGHT.pkl` 已預先放置，不會抓鏡像副本）。
 
 \* RTX 5080 Laptop 實測；估計器整體 ~8–11fps（依手部開關）、發布穩定 50Hz、
 因果 vs 離線 MAE 2.78°（tennis.mp4、主體鎖定後）。
@@ -301,6 +310,11 @@ tools/webcam2motion/run_live.sh --camera 0
 - policy lookahead clamp（未來幀=最新幀）＝理論上比訓練分布保守，激烈動作跟不緊。
 - deploy 容器 `--rm`：重開機後消失，要重建（見啟動程序 1）。
 - GVHMR 一律當 30fps 處理；高 fps 輸入的動力學會被略微平滑。
+- **DDS domain 0 只能有一個 simulator**：`run_sim_loop.py` / `run_sim_rh56.py` /
+  sonic_bench sim_server 都在 domain 0 發布 `rt/lowstate`——同時開兩個，deploy 的
+  觀測會被交錯污染，機器人「無緣無故」狂跌（2026-07-14 整晚教訓）。deploy 端
+  domain 寫死 0（`g1_deploy_onnx_ref.cpp` `ChannelFactory::Init(0,...)`）無法隔離；
+  `test_m0/test_m2` 啟動時會偵測並直接報錯（`assert_dds_clear`）。
 
 ## 13. 未來計畫（Future Work）
 
