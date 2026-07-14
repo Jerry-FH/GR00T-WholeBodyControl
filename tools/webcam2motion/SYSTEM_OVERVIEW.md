@@ -47,21 +47,75 @@
 
 ## 3. 模型與技術（Models & Techniques）
 
-| 元件 | 模型/技術 | 角色 | 單幀耗時* |
-|---|---|---|---|
-| 人物偵測 | YOLOv8x（ultralytics） | 找人、供裁切框 | 1–14ms（每 2 幀跑 1 次） |
-| 主體鎖定 | IoU 黏性選框 + 框 EMA | 多人場景鎖同一人 | ~0 |
-| 2D 姿態 | ViTPose-huge（fp16、關 flip-test） | COCO17 關鍵點 | ~42ms |
-| 手掌朝向 | MediaPipe HandLandmarker（腕 ROI、每 2 估計 1 次） | 掌面法向量→腕滾轉覆蓋＋Dex3 手指輸入 | ~14ms 平攤 |
-| 影像特徵 | HMR2.0 ViT backbone（fp16） | 1024 維特徵 | ~19ms |
-| 動作估計 | **GVHMR**（SIGGRAPH Asia 24）滑動視窗 causal 推論、關 postproc | SMPL body_pose(63)+global_orient(3) | ~19ms（W=32） |
-| 平滑 | OneEuro（body_pose 63 通道）＋四元數低通（朝向） | 抖動抑制 | ~0 |
-| 座標轉換 | repo 內建：y-up→z-up、`compute_human_joints` FK（標準骨架，**betas 丟棄**）、root-local | SMPL→SONIC 慣例 | ~1ms |
-| 手腕映射 | 肘 twist/swing 分解＋euler 合成＋限幅 | SMPL 腕→G1 六腕關節 | ~0 |
-| 追蹤控制 | GEAR-SONIC low_latency policy（SMPL encoder mode 2、lookahead 4 幀） | 全身追蹤＋平衡 | deploy 端 |
+### 3.1 管線各階段：做什麼、為什麼需要
 
-\* RTX 5080 Laptop 實測；估計器整體 **13.3fps（77ms 間隔）**、發布穩定 50Hz、
+每個模型解決前一階段「看不到」的東西——理解這條鏈的關鍵是每一階段的**盲區**：
+
+1. **YOLOv8x 人物偵測**（1–14ms，每 2 幀 1 次）
+   *做什麼*：整張畫面 → 人物邊界框。
+   *為什麼*：後續所有模型都吃「以人為中心的裁切」，不是整張畫面——裁切讓
+   ViT 模型解析度集中在人身上，也是多人場景的入口。偵測不需要每幀跑
+   （框移動慢），隔幀重用省 ~10ms。
+2. **主體鎖定**（~0ms）
+   *做什麼*：多個偵測框中，選「與上一幀 IoU ≥ 0.2」的那個＋EMA 平滑。
+   *為什麼*：純「信心值最高」會被路人搶框（實測 1 秒的搶框讓 MAE 從 2.78°
+   劣化到 5.24°）。IoU 黏性 = 最便宜的單目標追蹤器。
+3. **ViTPose-huge 2D 姿態**（~42ms，fp16、關 flip-test）
+   *做什麼*：裁切 → COCO17 個 2D 關鍵點（含信心值）。
+   *為什麼*：GVHMR 的觀測之一是 2D 關鍵點（強幾何約束——SMPL 投影回去要對
+   得上）；同時腕/肘點供手部 ROI 定位、肩髖點供軀幹尺度。**盲區：只有
+   「腕點」沒有手，掌心朝向對它不可觀測**。
+4. **MediaPipe HandLandmarker 手部**（~30ms/幀，VIDEO 追蹤模式）
+   *做什麼*：以 ViTPose 腕/肘點定位手部 ROI → 21 個手部關鍵點（含相對深度）
+   → (a) 掌面法向量 → 前臂系腕滾轉；(b) 角度鏈 → RH56DFQ 6 DOF 手指指令。
+   *為什麼*：補上第 3 步的盲區——掌心朝向與手指開合只能從手部特寫獲得。
+   VIDEO 模式（偵測一次→追蹤）而非 IMAGE 模式（每幀重偵測）是連續性的關鍵。
+5. **HMR2.0 ViT 影像特徵**（~19ms，fp16）
+   *做什麼*：同一份裁切 → 1024 維外觀特徵向量。
+   *為什麼*：2D 關鍵點丟失了「體型輪廓、肢體遮擋、朝向歧義」等外觀線索；
+   GVHMR 需要這份特徵消除單眼歧義（例如手臂在身前還是身後）。
+6. **GVHMR motion head**（~19ms @W=32，關 postproc）
+   *做什麼*：對最近 32 幀的（2D 關鍵點＋影像特徵＋相機資訊）序列做時序推論
+   → 每幀 SMPL `body_pose(63)+global_orient(3)`，取末幀。
+   *為什麼*：時序模型讓輸出在時間上一致（單幀模型逐幀抖）；「滑動視窗因果化」
+   是我們對離線模型的即時化改造，實測與離線全片結果只差 MAE 2.78°。
+   關掉的 postproc（IK 精修＋transl 後處理）實測 80ms 換 0 精度——因為
+   transl 我們本來就丟棄。
+7. **濾波**（~0ms）：OneEuro（速度自適應——慢動作強濾抖、快動作低延遲）
+   於 **FK 之前**作用在 63 維 body_pose；四元數低通處理朝向；手部另有
+   獨立 OneEuro＋淡入淡出＋增量鉗制（見 3.2）。
+8. **座標轉換＋FK**（~1ms，全部重用 repo 現成函式）
+   *做什麼*：y-up→z-up → `compute_human_joints` 前向運動學（標準骨架）→
+   去 base rotation → root-local 關節位置。
+   *為什麼*：SONIC 的 SMPL encoder 吃的是「去除朝向的局部關節位置＋朝向
+   四元數」。**betas（體型）被丟棄**——FK 用固定中性骨架，這使單眼的
+   深度/尺度誤差無法污染輸出（只有旋轉誤差要緊），是單眼方案成立的核心。
+9. **手腕映射**（~0ms）：SMPL 肘旋轉做 twist/swing 分解——twist（肘屈伸）
+   留在肘，swing（前臂旋前）併進腕 → euler 合成 → G1 六腕關節＋限幅。
+   MediaPipe 的腕滾轉在此覆蓋 SMPL 值（見 3.2 防護）。
+10. **SONIC policy**（deploy 端）：SMPL encoder（mode 2）把串流目標編碼為
+    latent，decoder 以 50Hz 輸出 29 關節指令並自行維持平衡——
+    **human→robot retargeting 就發生在這裡**，本系統不做顯式 IK。
+
+| 元件 | 模型 | 單幀耗時* |
+|---|---|---|
+| 人物偵測 | YOLOv8x | 1–14ms |
+| 2D 姿態 | ViTPose-huge（fp16） | ~42ms |
+| 手部 | MediaPipe HandLandmarker（VIDEO 模式） | ~30ms |
+| 影像特徵 | HMR2.0 ViT（fp16） | ~19ms |
+| 動作估計 | GVHMR 滑動視窗（W=32、no-postproc） | ~19ms |
+
+\* RTX 5080 Laptop 實測；估計器整體 ~8–11fps（依手部開關）、發布穩定 50Hz、
 因果 vs 離線 MAE 2.78°（tennis.mp4、主體鎖定後）。
+
+### 3.2 手部鏈的穩定性防護（為什麼需要）
+
+手部偵測天生會閃爍（遮擋、握拳、動態模糊）。防護三層，缺一實測會摔
+（tennis 迴歸曾因硬切換 26 falls）：
+- **VIDEO 追蹤模式**：偵測一次→逐幀追蹤（tennis 偵測率 20/42% → 34/73%）
+- **hold-not-fade**（`WristBlender`）：掉偵測時**維持最後手部值** 3 秒再慢淡出
+  ——因為 SMPL 的腕值是「錯誤答案」（中性、掌心朝內），回退等於 glitch
+- **增量鉗制**：腕關節每 tick ≤0.06 rad（3 rad/s），削掉任何殘餘尖峰
 
 ## 4. 子系統與檔案（Packages / Sub-systems）
 
@@ -78,6 +132,8 @@ tools/webcam2motion/
 ├── filters.py               OneEuro / QuatLowpass / DeltaClamp
 ├── replay_smpl_zmq.py       合成動作、pkl 回放器（M0/M1 驗證）
 ├── preview_viewer.py        host 端預覽視窗（SUB :5559）
+├── hand_viewer/             MuJoCo RH56DFQ 雙手檢視器（SUB :5556 rh56 欄位、
+│                            unitree_ros DFQ URDF+meshes、mimic 比例 qpos 展開）
 ├── test_m0.py / test_m2.py  全自動端到端測試（借用 tools/sonic_bench harness）
 ├── run_live.sh              一鍵起即時串流容器
 ├── docker/                  Dockerfile（CUDA 12.8.1 + torch cu128 + GVHMR + pytorch3d CPU）
@@ -117,15 +173,21 @@ header 描述欄位名/dtype/shape。**勿用 `pose_estimation_server_onboard_te
 ```
 相機幀 (BGR, ~30fps)
  → [EstimatorThread] YOLO 選框（IoU 鎖定主體）→ 256×256 裁切
- → ViTPose kp2d(17,3) ＋ HMR2 特徵(1024)   ← 兩者共用同一裁切、fp16
+ → ViTPose kp2d(17,3) ─┬─ HMR2 特徵(1024)        ← 共用同一裁切、fp16
+ │                     └─ 手部 ROI（腕/肘點定位）→ MediaPipe 21 關鍵點
+ │                          → 掌面法向量→腕滾轉 ＋ 角度鏈→RH56 6DOF
  → 環形緩衝（32 幀）→ GVHMR motion head → smpl_params_global 取末幀
- → OneEuro(body_pose) + 四元數低通(global_orient)          【估計率 ~13fps】
+ → OneEuro(body_pose) + 四元數低通(orient) + 手部 OneEuro   【估計率 8–11fps】
  → [main] 50Hz tick：兩次估計間插值（smooth）/持有（hold）/外插（predict）
  → smpl_adapter：y-up→z-up、FK→root-local smpl_joints、腕映射→joint_pos[23..28]
- → publisher：5 幀滑動視窗、epoch frame_index、protocol v3 → :5556
- → [deploy] StreamedMotionMerger（去重、catch-up）→ SMPL encoder（mode 2）
- → SONIC policy（50Hz，lookahead 4 幀 clamp 到最新）→ LowCmd → DDS
- → [sim/實機] 關節執行；g1_debug 回流量測
+ → WristBlender：MediaPipe 腕滾轉覆蓋（淡入/hold 3s/慢淡出＋增量鉗制）
+ → publisher：5 幀滑動視窗、epoch frame_index、protocol v3
+     ＋ left/right_hand_rh56(6) 欄位 → :5556
+ ├→ [deploy] StreamedMotionMerger（去重、catch-up）→ SMPL encoder（mode 2）
+ │   → SONIC policy（50Hz，lookahead 4 幀 clamp 到最新）→ LowCmd → DDS
+ │   → [sim/實機] 關節執行；g1_debug 回流量測      （rh56 欄位被 deploy 忽略）
+ └→ [hand_viewer] 訂閱同一 topic 讀 rh56 → RH56DFQ URDF qpos（mimic 比例展開）
+     → MuJoCo 檢視窗（未來：同一訂閱換成 Inspire SDK = 硬體 driver）
 ```
 
 延遲預算（實測分解）：相機 ~33ms ＋ 估計 77ms ＋ 插值 holdback 0–77ms（依模式）
@@ -205,6 +267,9 @@ tools/webcam2motion/run_live.sh --camera 0
 
 # 5) T4: 預覽（host，可選）
 .venv_sim/bin/python tools/webcam2motion/preview_viewer.py
+
+# 5b) T5: MuJoCo 手部檢視器（host，可選；--demo 不需串流可先看）
+.venv_sim/bin/python tools/webcam2motion/hand_viewer/hand_viewer.py
 
 # 6) 操作順序：T2 按 ']' → sim 按 '9' 放下 → T2 按 ENTER（串流開）
 # 全自動驗證（免手動）：

@@ -151,6 +151,23 @@ COCO17 只有腕「點」、單眼 GVHMR 的腕旋轉幾乎停在中性（掌心
 **手部模擬面板**——正規化掌面視角的手骨架（與相機角度無關）＋RH56 六軸指令條
 （`L R M I Tb Tr`），即時看到手部控制器會下的指令。
 
+穩定性：HandLandmarker 用 **VIDEO 追蹤模式**（偵測一次→逐幀追蹤，IMAGE 模式
+逐幀重偵測是舊版斷續的主因）；掉偵測時**維持最後手部值 3 秒**再慢淡出
+（不回退 SMPL 中性值）；ROI 有軀幹比例下限（手臂指向鏡頭時前臂 2D 縮短不再
+讓 ROI 塌掉）。
+
+### MuJoCo 手部檢視器（真實 RH56DFQ 連桿幾何）
+
+```bash
+.venv_sim/bin/python tools/webcam2motion/hand_viewer/hand_viewer.py --demo  # 正弦開合自測
+.venv_sim/bin/python tools/webcam2motion/hand_viewer/hand_viewer.py        # 吃 :5556 rh56 串流
+```
+
+模型來自 unitree_ros 的 `inspire_hand/DFQ_{left,right}_hand.urdf`＋26 個 mesh
+（已入庫 `hand_viewer/assets/`）。每手 12 關節由 6 DOF 指令經 URDF mimic 比例
+展開（拇指 intermediate=1.6×pitch、distal=2.4×pitch、四指 intermediate=1×proximal），
+純運動學寫 qpos——這層映射就是未來 Inspire SDK driver 的預演。
+
 ### 延遲模式（`--latency-mode`，run_live.sh 可透傳）
 
 | 模式 | 行為 | 延遲 |
