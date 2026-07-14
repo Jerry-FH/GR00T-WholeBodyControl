@@ -202,3 +202,19 @@ COCO17 只有腕「點」、單眼 GVHMR 的腕旋轉幾乎停在中性（掌心
   ＋框 EMA 平滑，路人走過不搶框（tennis.mp4 驗證：全片框中心最大跳距 27.8px、MAE 2.78°）。
   主體離開畫面 5 幀後 reset，重新以最高信心值鎖定。
 - 容器 python stdout 進 pipe 會 block-buffer：自動化腳本要用 `python -u`。
+
+### 階段 2：sim2sim 內建 RH56 手（已完成）
+
+sim 現在載入 `scene_53dof_rh56.xml`（G1 29DOF＋雙 DFQ 手，由
+`hand_viewer/make_rh56_model.py` 生成；Dex3 → RH56 質量分佈更貼近實機）。
+wbc yaml 已改：`ROBOT_SCENE`、`NUM_HAND_JOINTS: 12`、`NUM_HAND_MOTORS: 0`
+（手指力矩恆 0，純運動學驅動）、力矩表依新 actuator 順序重排。
+
+```bash
+# 手指會動的 sim（取代 run_sim_loop.py；--demo 正弦開合自測）
+.venv_sim/bin/python tools/webcam2motion/run_sim_rh56.py
+```
+
+原理：包一層 `sim_step`，每步把 :5556 的 rh56 欄位經 mimic 比例寫進 24 個
+手指 qpos（actuator_id==joint_id-1 不變式由生成腳本保證＋斷言）。
+用官方 `run_sim_loop.py` 也能跑（手指下垂不動，物理無礙）。
