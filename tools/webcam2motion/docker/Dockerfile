@@ -59,10 +59,15 @@ RUN uv pip install --python $VENV/bin/python mediapipe && \
 # which has no sm_120 (Blackwell) kernels and bricks CUDA for everything.
 # Its real runtime deps are listed explicitly (chumpy builds need pip).
 RUN uv pip install --python $VENV/bin/python pip && \
-    uv pip install --python $VENV/bin/python --no-build-isolation chumpy && \
-    uv pip install --python $VENV/bin/python einops timm && \
+    uv pip install --python $VENV/bin/python --no-build-isolation \
+    "chumpy @ git+https://github.com/mattloper/chumpy" && \
+    uv pip install --python $VENV/bin/python einops timm roma && \
     uv pip install --python $VENV/bin/python --no-deps \
     "git+https://github.com/warmshao/WiLoR-mini"
+# chumpy MUST come from git master (0.71, numpy>=1.24-compatible import fix) —
+# PyPI only has 0.70 whose `from numpy import bool,...` crashes at import.
+# runtime imports of wilor_mini: roma einops timm chumpy smplx skimage
+# huggingface_hub cv2 ultralytics — all but roma already in earlier layers
 
 # streaming code + gear_sonic utils come from the bind-mounted repo at runtime
 ENV PYTHONPATH=/workspace/gr00t-wbc:/opt/GVHMR

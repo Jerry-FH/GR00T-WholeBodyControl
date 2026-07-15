@@ -237,12 +237,24 @@ DDS domain 0 發布——**同一時間只能開一個 sim**，否則 deploy 觀
 --hand-backend wilor
 ```
 
-WiLoR（wilor-mini）在 GPU 上迴歸 MANO 手模（fp16 ~25–40ms），取代 MediaPipe 的
-~30ms CPU 負載；用我們的 ViTPose 腕部 ROI 餵 `predict_with_bboxes`（跳過其內建
-偵測器），21 點順序與 MediaPipe 相同、下游零改動。權重首跑自動下載至
-`checkpoints/wilor/`；官方 `MANO_RIGHT.pkl` 已由 `body_models/mano/` 預先複製。
-安裝（image 尚未重建時，在容器內執行）：
+WiLoR（wilor-mini）在 GPU 上迴歸 MANO 手模，取代 MediaPipe 的 CPU 負載；用我們的
+ViTPose 腕部 ROI 餵 `predict_with_bboxes`（跳過其內建偵測器），21 點順序與
+MediaPipe 相同、下游零改動。權重首跑自動下載至 `checkpoints/wilor/`（~2.4GB）；
+官方 `MANO_RIGHT.pkl` 已由 `body_models/mano/` 預先複製。
 
-```bash
-uv pip install --python /opt/venv/bin/python "git+https://github.com/warmshao/WiLoR-mini"
-```
+A/B（`eval_hands_ab.py`，tennis.mp4 前 300 幀，全管線同幀對比，RTX 5080）：
+
+| 後端 | 偵測率 L/R | 手部階段 | 腕滾轉逐幀差* | 整體 wall |
+|---|---|---|---|---|
+| mediapipe（CPU） | 38.2% / 56.5% | 30.4ms | 0.89 / 0.51 rad | 28.6s |
+| **wilor（GPU fp16）** | **100% / 99.6%** | **22.0ms（雙手）** | 1.07 / 0.59 rad | 27.3s |
+
+\* mediapipe 的逐幀差跨過偵測斷點（樣本少且間隔長），數字偏樂觀不可直接比；
+下游本來就有 WristBlender 0.06 rad/tick 鉗制與濾波。重點：WiLoR 是「給框就有解」
+的迴歸模型，遠距/模糊/半遮擋不再掉偵測——tennis 這種小手案例從斷斷續續變成全程
+穩定輸出，且 GPU 22ms 對整體 est fps 無影響（GVHMR 仍是瓶頸）。
+
+安裝陷阱：wilor-mini 的依賴會把 torch 降到 2.5.0+cu124（**無 sm_120 kernel，
+整個容器 CUDA 直接壞掉**）——Dockerfile 已改用 `--no-deps`＋明列依賴；手動裝在
+既有容器時照抄 Dockerfile 那段，或裝完後 `-U torch torchvision --index-url
+https://download.pytorch.org/whl/cu128` 救回。

@@ -43,7 +43,7 @@ def start_streamer(args, log_name: str = "streamer_stdout.log") -> subprocess.Po
         "-v", f"{REPO_ROOT}/tools/webcam2motion/checkpoints:/opt/GVHMR/inputs/checkpoints:ro",
         "-w", "/opt/GVHMR", "webcam2motion",
         "python", "-u", "/workspace/gr00t-wbc/tools/webcam2motion/stream_webcam_zmq.py",
-    ] + src
+    ] + src + ["--hand-backend", args.hand_backend]
     if args.preview:
         cmd += ["--preview"]
     return subprocess.Popen(cmd, stdout=open(LOGS / log_name, "wb"),
@@ -74,6 +74,8 @@ def main():
     ap.add_argument("--variant", default="low_latency")
     ap.add_argument("--duration", type=float, default=40.0)
     ap.add_argument("--preview", action="store_true")
+    ap.add_argument("--hand-backend", choices=["mediapipe", "wilor"],
+                    default="mediapipe")
     ap.add_argument("--restart-streamer", action="store_true",
                     help="kill + relaunch the streamer halfway (reproduces the "
                          "user re-running run_live.sh against a live deploy)")

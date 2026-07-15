@@ -102,7 +102,7 @@
 | 人物偵測 | YOLOv8x | 1–14ms |
 | 2D 姿態 | ViTPose-huge（fp16） | ~42ms |
 | 手部（預設） | MediaPipe HandLandmarker（VIDEO 模式，**CPU**） | ~30ms |
-| 手部（`--hand-backend wilor`） | WiLoR（wilor-mini，MANO 迴歸，**GPU fp16**） | ~25–40ms |
+| 手部（`--hand-backend wilor`） | WiLoR（wilor-mini，MANO 迴歸，**GPU fp16**） | ~22ms（雙手） |
 | 影像特徵 | HMR2.0 ViT（fp16） | ~19ms |
 | 動作估計 | GVHMR 滑動視窗（W=32、no-postproc） | ~19ms |
 
