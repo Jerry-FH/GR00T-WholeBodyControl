@@ -55,7 +55,13 @@ RUN uv pip install --python $VENV/bin/python mediapipe && \
 # Weights land in /opt/GVHMR/inputs/checkpoints/wilor (host bind mount) on first
 # run; the official MANO_RIGHT.pkl is pre-placed there from the user's
 # registered MANO download, so no mirrored copy is fetched.
-RUN uv pip install --python $VENV/bin/python \
+# --no-deps is ESSENTIAL: wilor-mini's pins drag torch down to 2.5.0+cu124,
+# which has no sm_120 (Blackwell) kernels and bricks CUDA for everything.
+# Its real runtime deps are listed explicitly (chumpy builds need pip).
+RUN uv pip install --python $VENV/bin/python pip && \
+    uv pip install --python $VENV/bin/python --no-build-isolation chumpy && \
+    uv pip install --python $VENV/bin/python einops timm && \
+    uv pip install --python $VENV/bin/python --no-deps \
     "git+https://github.com/warmshao/WiLoR-mini"
 
 # streaming code + gear_sonic utils come from the bind-mounted repo at runtime
